@@ -2,20 +2,13 @@ package server
 
 import (
 	"bytes"
+	"io/ioutil"
 	"net/http"
 )
 
-type bufferCloser struct {
-	bytes.Buffer
-}
 type response struct {
 	resp *http.Response
-	body *bufferCloser
-}
-
-func (buff *bufferCloser) Close() error {
-	buff.Reset()
-	return nil
+	body *bytes.Buffer
 }
 
 func newResponse(request *http.Request) *response {
@@ -40,8 +33,8 @@ func (r *response) WriteHeader(statuscode int) {
 
 func (r *response) Write(data []byte) (int, error) {
 	if r.body == nil {
-		r.body = new(bufferCloser)
-		r.resp.Body = r.body
+		r.body = new(bytes.Buffer)
+		r.resp.Body = ioutil.NopCloser(r.body)
 	}
 	n, err := r.body.Write(data)
 	r.resp.ContentLength += int64(n)

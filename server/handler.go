@@ -19,6 +19,7 @@ func (s *Server) handleAuth(w http.ResponseWriter, r *http.Request) {
 	username := r.Form.Get("username")
 	password := r.Form.Get("password")
 
+	// TODO: 进行用户名密码验证
 	if username != "h" || password != "h" {
 		writeLoginXML("用户名密码错误，请重新输入", w)
 	} else {
@@ -47,7 +48,7 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 		upath = "/" + upath
 	}
 
-	f, err := s.HTMLFileSystem.Open(upath)
+	f, err := s.htmlFS.Open(upath)
 	if err != nil {
 		s.log(upath)
 		writeNotFound(w)
@@ -130,6 +131,9 @@ func (s *Server) handleConnect(r *http.Request, client net.Conn) error {
 		buff := make([]byte, 2048)
 		n, err := client.Read(buff)
 		if err != nil {
+			if err == io.EOF {
+				return nil
+			}
 			return err
 		}
 		fmt.Println(string(buff[:n]))

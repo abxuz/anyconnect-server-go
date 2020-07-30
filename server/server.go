@@ -2,67 +2,89 @@ package server
 
 import (
 	"bufio"
-	"crypto/tls"
+	"errors"
 	"io"
 	"log"
 	"net"
 	"net/http"
 	"strings"
 	"sync"
-	"time"
 )
 
 // Server anyconnect server
 type Server struct {
-	HTMLFileSystem http.FileSystem
-	Loger          *log.Logger
-	Timeout        time.Duration
+	Listeners []net.Listener
+	PublicDir string
+	Loger     *log.Logger
 
-	l   net.Listener
-	run bool
-	wg  *sync.WaitGroup
-	mux *http.ServeMux
+	htmlFS http.FileSystem
+
+	run       bool
+	mux       *http.ServeMux
+	waitGroup *sync.WaitGroup
+	closeChan chan struct{}
 }
 
-// ListenAndServeTLS 开始工作
-func (s *Server) ListenAndServeTLS(network, addr string, config *tls.Config) error {
+// Serve 开始工作
+func (s *Server) Serve() error {
 
-	var err error
-
-	s.l, err = tls.Listen(network, addr, config)
-	if err != nil {
-		return err
+	if s.Listeners == nil || len(s.Listeners) == 0 {
+		return errors.New("no listener set")
 	}
 
+	s.htmlFS = http.Dir(s.PublicDir)
 	s.mux = http.NewServeMux()
-	s.mux.HandleFunc("/auth", s.handleAuth)
 	s.mux.HandleFunc("/index.html", s.handleLogin)
+	s.mux.HandleFunc("/auth", s.handleAuth)
 	s.mux.HandleFunc("/", s.handleRoot)
 
+	s.waitGroup = &sync.WaitGroup{}
+	s.closeChan = make(chan struct{}, 1)
 	s.run = true
-	s.wg = &sync.WaitGroup{}
-	for s.run {
-		c, err := s.l.Accept()
-		if err != nil {
-			s.log(err)
-			continue
-		}
 
-		s.wg.Add(1)
-		go s.serve(c)
+	for _, l := range s.Listeners {
+		s.waitGroup.Add(1)
+		go s.serveListener(l)
 	}
 
-	s.wg.Wait()
+	// 等所有客户端read循环和服务端accept均正常退出
+	s.waitGroup.Wait()
+	s.clean()
+	s.closeChan <- struct{}{}
 	return nil
 }
 
-func (s *Server) serve(c net.Conn) {
-	defer s.wg.Done()
+// Shutdown 停止服务
+func (s *Server) Shutdown() {
+	if s.Listeners != nil {
+		s.run = false
+		for _, l := range s.Listeners {
+			l.Close()
+		}
+		<-s.closeChan
+		close(s.closeChan)
+	}
+}
+
+func (s *Server) serveListener(l net.Listener) {
+	defer s.waitGroup.Done()
+	for s.run {
+		c, err := l.Accept()
+		if err != nil {
+			if s.run {
+				s.log(err)
+			}
+			continue
+		}
+		s.waitGroup.Add(1)
+		go s.serveClient(c)
+	}
+}
+
+func (s *Server) serveClient(c net.Conn) {
+	defer s.waitGroup.Done()
 	defer c.Close()
 	for s.run {
-		if s.Timeout > 0 {
-			c.SetDeadline(time.Now().Add(s.Timeout))
-		}
 		bufr := bufio.NewReader(c)
 		request, err := http.ReadRequest(bufr)
 		if err != nil || request == nil {
@@ -103,6 +125,10 @@ func (s *Server) serve(c net.Conn) {
 			return
 		}
 	}
+}
+
+func (s *Server) clean() {
+	// TODO: offline online clients, remove tun device
 }
 
 func (s *Server) log(msg interface{}) {
